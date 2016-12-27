@@ -17,6 +17,7 @@
 An OpenFlow 1.0 L2 learning switch implementation.
 """
 
+import pprint
 import os
 from ryu.base import app_manager
 from ryu.controller import ofp_event
@@ -32,6 +33,19 @@ from ryu.topology import event
 from ryu.lib import hub
 from operator import attrgetter
 
+
+#todo: move to speerate file
+class NetworkStats(object):
+    def __init__(self):
+        self.stats = {}#todo: rename
+	self.pp = pprint.PrettyPrinter(depth=6)
+
+    def set_stats(self, datapath_id, stats):
+	self.stats[datapath_id] = stats;
+
+    def print_stats(self):
+	self.pp.pprint(self.stats)
+
 class SimpleSwitch(app_manager.RyuApp):
     #OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -41,6 +55,7 @@ class SimpleSwitch(app_manager.RyuApp):
 	self.datapaths = {} 
         self.mac_to_port = {}
 	self.monitor_thread = hub.spawn(self._monitor)
+	self.network_stats = NetworkStats()
 
 
     def add_flow(self, datapath, in_port, dst, actions):
@@ -150,24 +165,28 @@ class SimpleSwitch(app_manager.RyuApp):
     def _port_stats_reply_handler(self, ev):
         body = ev.msg.body
 
-        self.logger.info('datapath         port     '
-                         'rx-pkts  rx-bytes rx-error '
-                         'tx-pkts  tx-bytes tx-error')
-        self.logger.info('---------------- -------- '
-                         '-------- -------- -------- '
-                         '-------- -------- --------')
-        for stat in sorted(body, key=attrgetter('port_no')):
-            self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
-                             ev.msg.datapath.id, stat.port_no,
-                             stat.rx_packets, stat.rx_bytes, stat.rx_errors,
-                             stat.tx_packets, stat.tx_bytes, stat.tx_errors)
+	self.network_stats.set_stats(ev.msg.datapath.id, body) #todo: link and port as a key
+
+        #self.logger.info('datapath         port     '
+        #                 'rx-pkts  rx-bytes rx-error '
+        #                 'tx-pkts  tx-bytes tx-error')
+        #self.logger.info('---------------- -------- '
+        #                 '-------- -------- -------- '
+        #                 '-------- -------- --------')
+        #for stat in sorted(body, key=attrgetter('port_no')):
+	 #   self.network_stats.set_stats(ev.msg.datapath.id, stat)
+            #self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
+            #                 ev.msg.datapath.id, stat.port_no,
+            #                 stat.rx_packets, stat.rx_bytes, stat.rx_errors,
+            #                 stat.tx_packets, stat.tx_bytes, stat.tx_errors)
 
     def _monitor(self):
         while True:
-	    os.system("clear")
             for dp in self.datapaths.values():
                 self._request_stats(dp)
             hub.sleep(1)	
+	    os.system("clear")
+	    self.network_stats.print_stats()
 #https://sdn-lab.com/2014/12/25/shortest-path-forwarding-with-openflow-on-ryu/
 #todo: get stats of links -> costs
 #map link -> cost
