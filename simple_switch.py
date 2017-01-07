@@ -32,6 +32,7 @@ from ryu.topology.api import get_switch, get_link, get_host
 from ryu.topology import event
 from ryu.lib import hub
 from operator import attrgetter
+import networkx as nx
 
 
 # todo: move to speerate file
@@ -57,6 +58,7 @@ class SimpleSwitch(app_manager.RyuApp):
         self.mac_to_port = {}
         self.monitor_thread = hub.spawn(self._monitor)
         self.network_stats = NetworkStats()
+        self.net = nx.DiGraph()
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -101,8 +103,9 @@ class SimpleSwitch(app_manager.RyuApp):
         # get the received port number from packet_in message.
         in_port = msg.match['in_port']
 
-        self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
+        #self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
 
+        '''
         # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = in_port
 
@@ -110,6 +113,22 @@ class SimpleSwitch(app_manager.RyuApp):
         # decide which port to output the packet, otherwise FLOOD.
         if dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][dst]
+        else:
+            out_port = ofproto.OFPP_FLOOD
+        '''
+
+        # add new node if doesn't exist
+        if src not in self.net:
+            self.net.add_node(src)
+            self.net.add_edge(dpid, src, {'port': in_port})
+            self.net.add_edge(src, dpid)
+
+        # compute shortest path
+        if dst in self.net:
+            path = nx.shortest_path(self.net, src, dst)
+            print "New path from {} to {}: {}".format(src, dst, path)
+            next = path[path.index(dpid) + 1]
+            out_port = self.net[dpid][next]['port']
         else:
             out_port = ofproto.OFPP_FLOOD
 
@@ -150,8 +169,12 @@ class SimpleSwitch(app_manager.RyuApp):
         switches = [switch.dp.id for switch in switches]
         links = get_link(self, None)
         links = [(link.src.dpid, link.dst.dpid, {'port': link.src.port_no}) for link in links]
-        print switches
-        print links
+
+        self.net.add_nodes_from(switches)
+        self.net.add_edges_from(links)
+
+        print "**********List of links**********"
+        print self.net.edges()
 
     @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def _state_change_handler(self, ev):
@@ -180,24 +203,23 @@ class SimpleSwitch(app_manager.RyuApp):
 
         self.network_stats.set_stats(ev.msg.datapath.id, body)  # todo: link and port as a key
 
-        # self.logger.info('datapath         port     '
-        #                 'rx-pkts  rx-bytes rx-error '
-        #                 'tx-pkts  tx-bytes tx-error')
-        # self.logger.info('---------------- -------- '
-        #                 '-------- -------- -------- '
-        #                 '-------- -------- --------')
-        # for stat in sorted(body, key=attrgetter('port_no')):
-        #   self.network_stats.set_stats(ev.msg.datapath.id, stat)
-        # self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
-        #                 ev.msg.datapath.id, stat.port_no,
-        #                 stat.rx_packets, stat.rx_bytes, stat.rx_errors,
-        #                 stat.tx_packets, stat.tx_bytes, stat.tx_errors)
+        '''self.logger.info('datapath         port     '
+                        'rx-pkts  rx-bytes rx-error '
+                        'tx-pkts  tx-bytes tx-error')
+        self.logger.info('---------------- -------- '
+                        '-------- -------- -------- '
+                        '-------- -------- --------')
+        for stat in sorted(body, key=attrgetter('port_no')):
+            self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
+                            ev.msg.datapath.id, stat.port_no,
+                            stat.rx_packets, stat.rx_bytes, stat.rx_errors,
+                            stat.tx_packets, stat.tx_bytes, stat.tx_errors)'''
 
     def _monitor(self):
         while True:
             for dp in self.datapaths.values():
                 self._request_stats(dp)
-            hub.sleep(1)
+            hub.sleep(5)
             os.system("clear")
             self.network_stats.print_stats()
 
