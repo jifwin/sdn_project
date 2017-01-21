@@ -26,7 +26,7 @@ from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_0, ofproto_v1_3
 from ryu.lib.mac import haddr_to_bin
 from ryu.lib.packet import packet
-from ryu.lib.packet import ethernet
+from ryu.lib.packet import ethernet, ipv4, tcp, udp
 from ryu.lib.packet import ether_types
 from ryu.topology.api import get_switch, get_link, get_host
 from ryu.topology import event
@@ -100,6 +100,10 @@ class SimpleSwitch(app_manager.RyuApp):
         dst = eth_pkt.dst
         src = eth_pkt.src
 
+        ipv4_pkt = pkt.get_protocol(ipv4.ipv4)
+        tcp_pkt = pkt.get_protocol(tcp.tcp)
+        udp_pkt = pkt.get_protocol(udp.udp)
+
         # get the received port number from packet_in message.
         in_port = msg.match['in_port']
 
@@ -126,7 +130,7 @@ class SimpleSwitch(app_manager.RyuApp):
         # compute shortest path
         if dst in self.net:
             path = nx.shortest_path(self.net, src, dst)
-            print "New path from {} to {}: {}".format(src, dst, path)
+            print "New path on s{} from {} to {}: {}".format(dpid, src, dst, path)
             next = path[path.index(dpid) + 1]
             out_port = self.net[dpid][next]['port']
         else:
@@ -137,7 +141,26 @@ class SimpleSwitch(app_manager.RyuApp):
 
         # install a flow to avoid packet_in next time.
         if out_port != ofproto.OFPP_FLOOD:
-            match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
+            if ipv4_pkt != None:
+                if tcp_pkt != None:
+                    match = parser.OFPMatch(ipv4_src=ipv4_pkt.src,
+                                            ipv4_dst=ipv4_pkt.dst,
+                                            ip_proto=ipv4_pkt.proto,
+                                            eth_type=eth_pkt.ethertype,
+                                            tcp_src=tcp_pkt.src_port,
+                                            tcp_dst=tcp_pkt.dst_port)
+                elif udp_pkt != None:
+                    match = parser.OFPMatch(ipv4_src=ipv4_pkt.src,
+                                            ipv4_dst=ipv4_pkt.dst,
+                                            ip_proto=ipv4_pkt.proto,
+                                            eth_type=eth_pkt.ethertype,
+                                            udp_src=udp_pkt.src_port,
+                                            udp_dst=udp_pkt.dst_port)
+                else:
+                    match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
+            else:
+                match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
+
             self.add_flow(datapath, 1, match, actions)
 
         # construct packet_out message and send it.
