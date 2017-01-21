@@ -249,7 +249,8 @@ class SimpleSwitch(app_manager.RyuApp):
                              stat.rx_packets, stat.rx_bytes, stat.rx_errors,
                              stat.tx_packets, stat.tx_bytes, stat.tx_errors)
              if stat.port_no!= 0xfffffffe:
-                rx_tx_load.append(stat.rx_bytes)
+                rx_tx_load.append(stat.rx_bytes + stat.tx_bytes)
+
 
         for i in range(len(switch_no)):
             self.network_stats.current_load[switch_no[i]] = rx_tx_load
@@ -285,9 +286,7 @@ class SimpleSwitch(app_manager.RyuApp):
             hub.sleep(self.sleep_time)
             self.calculate_load()
             #self.network_stats.print_stats()
-            #tot_stats = self.network_stats.stats
-            #if tot_stats!={}:
-            #   print tot_stats.rx_bytes
+
 
         # https://sdn-lab.com/2014/12/25/shortest-path-forwarding-with-openflow-on-ryu/
         # todo: get stats of links -> costs
