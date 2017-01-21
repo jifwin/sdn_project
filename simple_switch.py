@@ -19,6 +19,7 @@ An OpenFlow 1.0 L2 learning switch implementation.
 
 import pprint
 import os
+import math
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER, DEAD_DISPATCHER, CONFIG_DISPATCHER
@@ -40,12 +41,17 @@ class NetworkStats(object):
     def __init__(self):
         self.stats = {}  # todo: rename
         self.pp = pprint.PrettyPrinter(depth=6)
+        self.current_load = {}
+        self.prev_load = {}
 
     def set_stats(self, datapath_id, stats):
         self.stats[datapath_id] = stats
 
     def print_stats(self):
         self.pp.pprint(self.stats)
+
+    def get_load(self):
+        return self.load
 
 
 class SimpleSwitch(app_manager.RyuApp):
@@ -59,6 +65,7 @@ class SimpleSwitch(app_manager.RyuApp):
         self.monitor_thread = hub.spawn(self._monitor)
         self.network_stats = NetworkStats()
         self.net = nx.DiGraph()
+        self.sleep_time = 5
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -107,7 +114,7 @@ class SimpleSwitch(app_manager.RyuApp):
         # get the received port number from packet_in message.
         in_port = msg.match['in_port']
 
-        #self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
+        # self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
 
         '''
         # learn a mac address to avoid FLOOD next time.
@@ -184,7 +191,7 @@ class SimpleSwitch(app_manager.RyuApp):
         elif reason == ofproto.OFPPR_MODIFY:
             self.logger.info("port modified %s", port_no)
         else:
-            self.logger.info("Illeagal port state %s %s", port_no, reason)
+            self.logger.info("Illegal port state %s %s", port_no, reason)
 
     @set_ev_cls(event.EventSwitchEnter)
     def get_topology_data(self, ev):
@@ -224,28 +231,66 @@ class SimpleSwitch(app_manager.RyuApp):
     def _port_stats_reply_handler(self, ev):
         body = ev.msg.body
 
+        switch_no = []
+        rx_tx_load = []
+
         self.network_stats.set_stats(ev.msg.datapath.id, body)  # todo: link and port as a key
 
-        '''self.logger.info('datapath         port     '
-                        'rx-pkts  rx-bytes rx-error '
-                        'tx-pkts  tx-bytes tx-error')
+        self.logger.info('datapath         port     '
+                         'rx-pkts  rx-bytes rx-error '
+                         'tx-pkts  tx-bytes tx-error')
         self.logger.info('---------------- -------- '
-                        '-------- -------- -------- '
-                        '-------- -------- --------')
+                         '-------- -------- -------- '
+                         '-------- -------- --------')
+        switch_no.append(ev.msg.datapath.id)
         for stat in sorted(body, key=attrgetter('port_no')):
-            self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
-                            ev.msg.datapath.id, stat.port_no,
-                            stat.rx_packets, stat.rx_bytes, stat.rx_errors,
-                            stat.tx_packets, stat.tx_bytes, stat.tx_errors)'''
+             self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
+                             ev.msg.datapath.id, stat.port_no,
+                             stat.rx_packets, stat.rx_bytes, stat.rx_errors,
+                             stat.tx_packets, stat.tx_bytes, stat.tx_errors)
+             if stat.port_no!= 0xfffffffe:
+                rx_tx_load.append(stat.rx_bytes)
+
+        for i in range(len(switch_no)):
+            self.network_stats.current_load[switch_no[i]] = rx_tx_load
+
+
+    def calculate_load(self):
+            os.system("clear")
+            load = []
+            load_dict = {}
+            print "Current rx+tx bytes:"
+            print self.network_stats.current_load
+            print "Previously measured rx+tx bytes:"
+            print self.network_stats.prev_load
+            if self.network_stats.prev_load!={}:
+                    for i in self.network_stats.current_load.keys():#po switchach
+                        for j in range (0, len(self.network_stats.current_load[i])):# po liczbie portow dla kazdego switcha
+                             load.append(math.fabs((self.network_stats.prev_load[i][j]-self.network_stats.current_load[i][j]))/self.sleep_time)
+                        load_dict[i] = load
+                        load = []
+
+            self.network_stats.prev_load = self.network_stats.current_load
+            self.network_stats.current_load = {}
+            print "Calculated load:"
+            print load_dict
+            return load_dict
+
+
 
     def _monitor(self):
         while True:
             for dp in self.datapaths.values():
                 self._request_stats(dp)
-            hub.sleep(5)
-            os.system("clear")
-            self.network_stats.print_stats()
+            hub.sleep(self.sleep_time)
+            self.calculate_load()
+            #self.network_stats.print_stats()
+            #tot_stats = self.network_stats.stats
+            #if tot_stats!={}:
+            #   print tot_stats.rx_bytes
 
-# https://sdn-lab.com/2014/12/25/shortest-path-forwarding-with-openflow-on-ryu/
-# todo: get stats of links -> costs
-# map link -> cost
+        # https://sdn-lab.com/2014/12/25/shortest-path-forwarding-with-openflow-on-ryu/
+        # todo: get stats of links -> costs
+        # map link -> cost
+        # do self.net ustawic koszty laczy
+        # napisac generator ktory to przetestuje, sprawdzic czy przeplywy sie kasuja po jakims czasie
