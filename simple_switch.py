@@ -34,9 +34,12 @@ from ryu.topology import event
 from ryu.lib import hub
 from operator import attrgetter
 import networkx as nx
+from ryu.lib.packet import arp
+from ryu.lib.packet import ethernet
 
+ARP = arp.arp.__name__
+ETHERNET = ethernet.ethernet.__name__
 
-# todo: move to speerate file
 class NetworkStats(object):
     def __init__(self):
         self.stats = {}  # todo: rename
@@ -66,6 +69,7 @@ class SimpleSwitch(app_manager.RyuApp):
         self.network_stats = NetworkStats()
         self.net = nx.DiGraph()
         self.sleep_time = 5
+	self.arp_table = {}
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -95,7 +99,8 @@ class SimpleSwitch(app_manager.RyuApp):
         msg = ev.msg
         datapath = msg.datapath
         ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+        ofp = ofproto
+	parser = datapath.ofproto_parser
 
         # get Datapath ID to identify OpenFlow switches.
         dpid = datapath.id
@@ -111,12 +116,22 @@ class SimpleSwitch(app_manager.RyuApp):
         tcp_pkt = pkt.get_protocol(tcp.tcp)
         udp_pkt = pkt.get_protocol(udp.udp)
 
+	header_list =dict((p.protocol_name, p) for p in pkt)
+	print header_list
+
+	if ARP in header_list: # If it is an ARP packet, learn the source IP
+	    print "learning arp"
+	    self.arp_table[header_list[ARP].src_ip] = src
+
+
+
+
         # get the received port number from packet_in message.
         in_port = msg.match['in_port']
 
         # self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
 
-        '''
+        
         # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = in_port
 
@@ -125,8 +140,14 @@ class SimpleSwitch(app_manager.RyuApp):
         if dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][dst]
         else:
-            out_port = ofproto.OFPP_FLOOD
-        '''
+	    if self.arp_handler(header_list, datapath, in_port, msg.buffer_id):
+                print "ARP_PROXY_13"
+                return None
+            else:
+                out_port = ofp.OFPP_FLOOD
+                print 'OFPP_FLOOD'        
+
+
 
         # add new node if doesn't exist
         if src not in self.net:
@@ -294,3 +315,96 @@ class SimpleSwitch(app_manager.RyuApp):
         # map link -> cost
         # do self.net ustawic koszty laczy
         # napisac generator ktory to przetestuje, sprawdzic czy przeplywy sie kasuja po jakims czasie
+
+
+    def arp_handler(self, header_list, datapath, in_port, msg_buffer_id):
+        header_list = header_list
+        datapath = datapath
+        in_port = in_port
+        dpid = datapath.id
+ 
+        """
+        If header_list contains ETHERNET, get source and destination MAC
+        """
+        if ETHERNET in header_list:
+            eth_dst = header_list[ETHERNET].dst
+            eth_src = header_list[ETHERNET].src
+ 
+        """
+        Part of the Loop Prevention
+ 
+        If the packet is ARP and it is broadcast, then get dst_ip. And if local 
+        has key (dpid, eth_src, dst_ip), if the value of key is not in_port, then 
+        send the packet. Otherwise, add the key into dictionary, and set its 
+        value to in_port
+ 
+        In this case, the very first ARP broadcast packet will be recorded 
+        according to the in_port, and the rest of the coming ARP packets will
+        be checked with key (dpid, src, dst_ip):
+           1. If coming packet's key is existed, and from another in_port (flood)
+           2. If coming packet's key is existed, and from the original in_port 
+           (drop)
+           3. If coming packet's key is new (which is a very first ARP packet)
+        """
+        if eth_dst == 'ff:ff:ff:ff:ff:ff' and ARP in header_list:
+            arp_dst_ip = header_list[ARP].dst_ip
+            if (dpid, eth_src, arp_dst_ip) in self.sw:
+                if self.sw[(datapath.id, eth_src, arp_dst_ip)] != in_port:
+                    out = datapath.ofproto_parser.OFPPacketOut(
+                        datapath=datapath,
+                        buffer_id=datapath.ofproto.OFP_NO_BUFFER,
+                        in_port=in_port,
+                        actions=[], 
+                        data=None)
+                    datapath.send_msg(out)
+                    return True
+            else:
+                self.sw[(dpid, eth_src, arp_dst_ip)] = in_port
+ 
+        """
+        Part of the ARP Proxy
+ 
+        If the packet is ARP and it is not broadcast, get information in detail 
+        such as operation code (REQUEST/REPLY)
+        """
+        if ARP in header_list:
+            hwtype = header_list[ARP].hwtype
+            proto = header_list[ARP].proto
+            hlen = header_list[ARP].hlen
+            plen = header_list[ARP].plen
+            opcode = header_list[ARP].opcode
+            arp_src_ip = header_list[ARP].src_ip
+            arp_dst_ip = header_list[ARP].dst_ip
+            actions = []
+ 
+            """
+            packet is an ARP request, if it is learnt already, then reply it
+            """
+            if opcode == arp.ARP_REQUEST:
+                if arp_dst_ip in self.arp_table:
+                    actions.append(datapath.ofproto_parser.OFPActionOutput(
+                    in_port))
+ 
+                    ARP_Reply = packet.Packet()
+                    ARP_Reply.add_protocol(ethernet.ethernet(
+                        ethertype=header_list[ETHERNET].ethertype,
+                        dst=eth_src,
+                        src=self.arp_table[arp_dst_ip]))
+                    ARP_Reply.add_protocol(arp.arp(
+                        opcode=arp.ARP_REPLY,
+                        src_mac=self.arp_table[arp_dst_ip],
+                        src_ip=arp_dst_ip,
+                        dst_mac=eth_src,
+                        dst_ip=arp_src_ip))
+ 
+                    ARP_Reply.serialize()
+ 
+                    out = datapath.ofproto_parser.OFPPacketOut(
+                        datapath=datapath,
+                        buffer_id=datapath.ofproto.OFP_NO_BUFFER,
+                        in_port=datapath.ofproto.OFPP_CONTROLLER,
+                        actions=actions, 
+                        data=ARP_Reply.data)
+                    datapath.send_msg(out)
+                    return True
+        return False
