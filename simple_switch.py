@@ -14,22 +14,19 @@
 # limitations under the License.
 
 """
-An OpenFlow 1.0 L2 learning switch implementation.
+An OpenFlow 1.3 L2 learning switch implementation.
 """
 
-import pprint
 import os
 import math
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER, DEAD_DISPATCHER, CONFIG_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.ofproto import ofproto_v1_0, ofproto_v1_3
-from ryu.lib.mac import haddr_to_bin
+from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet, ipv4, tcp, udp
-from ryu.lib.packet import ether_types
-from ryu.topology.api import get_switch, get_link, get_host
+from ryu.topology.api import get_switch, get_link
 from ryu.topology import event
 from ryu.lib import hub
 from operator import attrgetter
@@ -39,29 +36,16 @@ import networkx as nx
 # todo: move to speerate file
 class NetworkStats(object):
     def __init__(self):
-        self.stats = {}  # todo: rename
-        self.pp = pprint.PrettyPrinter(depth=6)
         self.current_load = {}
         self.prev_load = {}
 
-    def set_stats(self, datapath_id, stats):
-        self.stats[datapath_id] = stats
-
-    def print_stats(self):
-        self.pp.pprint(self.stats)
-
-    def get_load(self):
-        return self.load
-
 
 class SimpleSwitch(app_manager.RyuApp):
-    # OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch, self).__init__(*args, **kwargs)
         self.datapaths = {}
-        self.mac_to_port = {}
         self.port_to_dst = {}
         self.monitor_thread = hub.spawn(self._monitor)
         self.network_stats = NetworkStats()
@@ -100,7 +84,6 @@ class SimpleSwitch(app_manager.RyuApp):
 
         # get Datapath ID to identify OpenFlow switches.
         dpid = datapath.id
-        self.mac_to_port.setdefault(dpid, {})
 
         # analyse the received packets using the packet library.
         pkt = packet.Packet(msg.data)
@@ -116,18 +99,6 @@ class SimpleSwitch(app_manager.RyuApp):
         in_port = msg.match['in_port']
 
         # self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
-
-        '''
-        # learn a mac address to avoid FLOOD next time.
-        self.mac_to_port[dpid][src] = in_port
-
-        # if the destination mac address is already learned,
-        # decide which port to output the packet, otherwise FLOOD.
-        if dst in self.mac_to_port[dpid]:
-            out_port = self.mac_to_port[dpid][dst]
-        else:
-            out_port = ofproto.OFPP_FLOOD
-        '''
 
         # add new node if doesn't exist
         if src not in self.net:
@@ -179,22 +150,6 @@ class SimpleSwitch(app_manager.RyuApp):
                                   data=msg.data)
         datapath.send_msg(out)
 
-    @set_ev_cls(ofp_event.EventOFPPortStatus, MAIN_DISPATCHER)
-    def _port_status_handler(self, ev):
-        msg = ev.msg
-        reason = msg.reason
-        port_no = msg.desc.port_no
-
-        ofproto = msg.datapath.ofproto
-        if reason == ofproto.OFPPR_ADD:
-            self.logger.info("port added %s", port_no)
-        elif reason == ofproto.OFPPR_DELETE:
-            self.logger.info("port deleted %s", port_no)
-        elif reason == ofproto.OFPPR_MODIFY:
-            self.logger.info("port modified %s", port_no)
-        else:
-            self.logger.info("Illegal port state %s %s", port_no, reason)
-
     @set_ev_cls(event.EventSwitchEnter)
     def get_topology_data(self, ev):
         switches = get_switch(self, None)
@@ -239,8 +194,6 @@ class SimpleSwitch(app_manager.RyuApp):
 
         switch_no = []
         rx_tx_load = []
-
-        self.network_stats.set_stats(ev.msg.datapath.id, body)  # todo: link and port as a key
 
         '''self.logger.info('datapath         port     '
                          'rx-pkts  rx-bytes rx-error '
@@ -302,11 +255,10 @@ class SimpleSwitch(app_manager.RyuApp):
                 self._request_stats(dp)
             hub.sleep(self.sleep_time)
             self.calculate_load()
-            #self.network_stats.print_stats()
 
 
-        # https://sdn-lab.com/2014/12/25/shortest-path-forwarding-with-openflow-on-ryu/
-        # todo: get stats of links -> costs
-        # map link -> cost
-        # do self.net ustawic koszty laczy
-        # napisac generator ktory to przetestuje, sprawdzic czy przeplywy sie kasuja po jakims czasie
+    # https://sdn-lab.com/2014/12/25/shortest-path-forwarding-with-openflow-on-ryu/
+    # todo: get stats of links -> costs
+    # map link -> cost
+    # do self.net ustawic koszty laczy
+    # napisac generator ktory to przetestuje, sprawdzic czy przeplywy sie kasuja po jakims czasie
