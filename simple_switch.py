@@ -47,7 +47,7 @@ class SimpleSwitch(app_manager.RyuApp):
         super(SimpleSwitch, self).__init__(*args, **kwargs)
         self.datapaths = {}
         self.port_to_dst = {}
-        self.monitor_thread = hub.spawn(self._monitor)
+        #self.monitor_thread = hub.spawn(self._monitor)
         self.network_stats = NetworkStats()
         self.net = nx.DiGraph()
         self.sleep_time = 2
@@ -103,7 +103,7 @@ class SimpleSwitch(app_manager.RyuApp):
         # get the received port number from packet_in message.
         in_port = msg.match['in_port']
 
-        # self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
+        self.logger.info("packet in %s %s %s %s %s", dpid, src, dst, in_port, eth_pkt.ethertype)
 
         # add new node if doesn't exist
         if src not in self.net:
