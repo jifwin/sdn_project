@@ -25,8 +25,8 @@ from ryu.controller.handler import MAIN_DISPATCHER, DEAD_DISPATCHER, CONFIG_DISP
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet
-from ryu.lib.packet import ethernet, ipv4, tcp, udp
-from ryu.topology.api import get_switch, get_link
+from ryu.lib.packet import ethernet, ipv4, tcp, udp, arp
+from ryu.topology.api import get_switch, get_link, get_host
 from ryu.topology import event
 from ryu.lib import hub
 from operator import attrgetter
@@ -47,10 +47,10 @@ class SimpleSwitch(app_manager.RyuApp):
         super(SimpleSwitch, self).__init__(*args, **kwargs)
         self.datapaths = {}
         self.port_to_dst = {}
-        #self.monitor_thread = hub.spawn(self._monitor)
+        self.monitor_thread = hub.spawn(self._monitor)
         self.network_stats = NetworkStats()
         self.net = nx.DiGraph()
-        self.sleep_time = 2
+        self.sleep_time = 10
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -88,7 +88,7 @@ class SimpleSwitch(app_manager.RyuApp):
         # analyse the received packets using the packet library.
         pkt = packet.Packet(msg.data)
         eth_pkt = pkt.get_protocol(ethernet.ethernet)
-        
+
         # avoid broadcast from LLDP
         if eth_pkt.ethertype == 35020 or eth_pkt.ethertype == 34525:
             return
@@ -103,7 +103,7 @@ class SimpleSwitch(app_manager.RyuApp):
         # get the received port number from packet_in message.
         in_port = msg.match['in_port']
 
-        self.logger.info("packet in %s %s %s %s %s", dpid, src, dst, in_port, eth_pkt.ethertype)
+        # self.logger.info("packet in %s %s %s %s %s", dpid, src, dst, in_port, eth_pkt.ethertype)
 
         # add new node if doesn't exist
         if src not in self.net:
@@ -119,7 +119,21 @@ class SimpleSwitch(app_manager.RyuApp):
             next = path[path.index(dpid) + 1]
             out_port = self.net[dpid][next]['port']
         else:
-            out_port = ofproto.OFPP_FLOOD
+            hosts = [host.mac for host in get_host(self, None)]
+            tree = nx.bfs_edges(self.net, src)
+
+            for src, dst in list(tree):
+                if src == dpid and (dst in self.datapaths or dst in hosts):
+                    out_port = self.net[src][dst]['port']
+                    #print dpid, dst, out_port
+                    actions = [parser.OFPActionOutput(out_port)]
+                    # construct packet_out message and send it.
+                    out = parser.OFPPacketOut(datapath=datapath,
+                                              buffer_id=ofproto.OFP_NO_BUFFER,
+                                              in_port=in_port, actions=actions,
+                                              data=msg.data)
+                    datapath.send_msg(out)
+            return
 
         # construct action list.
         actions = [parser.OFPActionOutput(out_port)]
