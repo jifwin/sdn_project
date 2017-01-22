@@ -88,6 +88,11 @@ class SimpleSwitch(app_manager.RyuApp):
         # analyse the received packets using the packet library.
         pkt = packet.Packet(msg.data)
         eth_pkt = pkt.get_protocol(ethernet.ethernet)
+        
+        # avoid broadcast from LLDP
+        if eth_pkt.ethertype == 35020 or eth_pkt.ethertype == 34525:
+            return
+        
         dst = eth_pkt.dst
         src = eth_pkt.src
 
