@@ -62,10 +62,11 @@ class SimpleSwitch(app_manager.RyuApp):
         super(SimpleSwitch, self).__init__(*args, **kwargs)
         self.datapaths = {}
         self.mac_to_port = {}
+        self.port_to_dst = {}
         self.monitor_thread = hub.spawn(self._monitor)
         self.network_stats = NetworkStats()
         self.net = nx.DiGraph()
-        self.sleep_time = 5
+        self.sleep_time = 2
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -136,8 +137,9 @@ class SimpleSwitch(app_manager.RyuApp):
 
         # compute shortest path
         if dst in self.net:
-            path = nx.shortest_path(self.net, src, dst)
-            print "New path on s{} from {} to {}: {}".format(dpid, src, dst, path)
+            path = nx.shortest_path(self.net, src, dst, 'weight')
+            #print "New path on s{} from {} to {}: {}".format(dpid, src, dst, path)
+            #print "Cost: {}".format(nx.shortest_path_length(self.net, src, dst, 'weight'))
             next = path[path.index(dpid) + 1]
             out_port = self.net[dpid][next]['port']
         else:
@@ -164,9 +166,9 @@ class SimpleSwitch(app_manager.RyuApp):
                                             udp_src=udp_pkt.src_port,
                                             udp_dst=udp_pkt.dst_port)
                 else:
-                    match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
+                    match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_type=eth_pkt.ethertype, ip_proto=ipv4_pkt.proto)
             else:
-                match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
+                match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_type=eth_pkt.ethertype)
 
             self.add_flow(datapath, 1, match, actions)
 
@@ -198,13 +200,17 @@ class SimpleSwitch(app_manager.RyuApp):
         switches = get_switch(self, None)
         switches = [switch.dp.id for switch in switches]
         links = get_link(self, None)
-        links = [(link.src.dpid, link.dst.dpid, {'port': link.src.port_no}) for link in links]
+
+        for link in links:
+            self.port_to_dst[(link.src.dpid, link.src.port_no)] = link.dst.dpid
+
+        links = [(link.src.dpid, link.dst.dpid, {'weight': 1, 'port': link.src.port_no}) for link in links]
 
         self.net.add_nodes_from(switches)
         self.net.add_edges_from(links)
 
         print "**********List of links**********"
-        print self.net.edges()
+        print self.net.edges(data=True)
 
     @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def _state_change_handler(self, ev):
@@ -236,18 +242,18 @@ class SimpleSwitch(app_manager.RyuApp):
 
         self.network_stats.set_stats(ev.msg.datapath.id, body)  # todo: link and port as a key
 
-        self.logger.info('datapath         port     '
+        '''self.logger.info('datapath         port     '
                          'rx-pkts  rx-bytes rx-error '
                          'tx-pkts  tx-bytes tx-error')
         self.logger.info('---------------- -------- '
                          '-------- -------- -------- '
-                         '-------- -------- --------')
+                         '-------- -------- --------')'''
         switch_no.append(ev.msg.datapath.id)
         for stat in sorted(body, key=attrgetter('port_no')):
-             self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
+             '''self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
                              ev.msg.datapath.id, stat.port_no,
                              stat.rx_packets, stat.rx_bytes, stat.rx_errors,
-                             stat.tx_packets, stat.tx_bytes, stat.tx_errors)
+                             stat.tx_packets, stat.tx_bytes, stat.tx_errors)'''
              if stat.port_no!= 0xfffffffe:
                 rx_tx_load.append(stat.rx_bytes + stat.tx_bytes)
 
@@ -255,27 +261,38 @@ class SimpleSwitch(app_manager.RyuApp):
         for i in range(len(switch_no)):
             self.network_stats.current_load[switch_no[i]] = rx_tx_load
 
-
     def calculate_load(self):
-            os.system("clear")
-            load = []
-            load_dict = {}
-            print "Current rx+tx bytes:"
-            print self.network_stats.current_load
-            print "Previously measured rx+tx bytes:"
-            print self.network_stats.prev_load
-            if self.network_stats.prev_load!={}:
-                    for i in self.network_stats.current_load.keys():#po switchach
-                        for j in range (0, len(self.network_stats.current_load[i])):# po liczbie portow dla kazdego switcha
-                             load.append(math.fabs((self.network_stats.prev_load[i][j]-self.network_stats.current_load[i][j]))/self.sleep_time)
-                        load_dict[i] = load
-                        load = []
+        os.system("clear")
+        load = []
+        load_dict = {}
+        print "Current rx+tx bytes:"
+        print self.network_stats.current_load
+        print "Previously measured rx+tx bytes:"
+        print self.network_stats.prev_load
+        if self.network_stats.prev_load != {}:
+            for i in self.network_stats.current_load.keys():  # po switchach
+                for j in range(0, len(self.network_stats.current_load[i])):  # po liczbie portow dla kazdego switcha
+                    load_avg = math.fabs((self.network_stats.prev_load[i][j] - self.network_stats.current_load[i][j])) / self.sleep_time / (1024*1024)
+                    load.append(load_avg)
 
-            self.network_stats.prev_load = self.network_stats.current_load
-            self.network_stats.current_load = {}
-            print "Calculated load:"
-            print load_dict
-            return load_dict
+                    if (i, j+1) in self.port_to_dst:
+                        src = i
+                        dst = self.port_to_dst[(i, j+1)]
+
+                        if load_avg > 80:
+                            self.net[src][dst]['weight'] = 100
+                        else:
+                            self.net[src][dst]['weight'] = 1
+
+                load_dict[i] = load
+                load = []
+
+        self.network_stats.prev_load = self.network_stats.current_load
+        self.network_stats.current_load = {}
+        print "Calculated load:"
+        print load_dict
+        print self.net.edges(data=True)
+        return load_dict
 
 
 
