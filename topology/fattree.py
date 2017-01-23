@@ -39,7 +39,7 @@ class FatTree( Topo ):
 
             # Connect Tor to Aggr
             for j in range(half_ports):
-                self.addLink(sw, aggrs[j])
+                self.addLink(sw, aggrs[j], bw=100)
 
             # Create hosts and links
             for j in range(half_ports):
