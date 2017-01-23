@@ -241,7 +241,7 @@ class SimpleSwitch(app_manager.RyuApp):
         #print self.network_stats.current_load
         #print "Previously measured rx+tx bytes:"
         #print self.network_stats.prev_load
-        print "***Link statistics***"
+        print "****** Link statistics ******"
         if self.network_stats.prev_load != {}:
             for i in self.network_stats.current_load.keys():  # po switchach
                 for j in range(0, len(self.network_stats.current_load[i])):  # po liczbie portow dla kazdego switcha
